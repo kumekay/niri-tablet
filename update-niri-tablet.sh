@@ -1,16 +1,17 @@
 #!/bin/sh
 # update-niri-tablet.sh — the user-facing updater for the niri-tablet package.
 #
-# Fetches the latest release tag from GitHub, shows what changed since the
-# installed version, builds the package with makepkg, installs it, and pins
-# stock niri in /etc/pacman.conf (IgnorePkg) if that pin is missing. Works
-# for first installs too. Run it from anywhere inside your clone:
+# Builds this clone's main branch (fast-forwarded from origin), shows what
+# changed since the installed version, builds the package with makepkg,
+# installs it, and pins stock niri in /etc/pacman.conf (IgnorePkg) if that
+# pin is missing. Works for first installs too. If an `upstream` remote
+# exists, it also reports upstream commits that main does not have yet.
+# Run it from anywhere inside your clone:
 #
-#   ./update-niri-tablet.sh              update to the latest release
+#   ./update-niri-tablet.sh              build and install main
 #   ./update-niri-tablet.sh --check      report only, build nothing
 #   ./update-niri-tablet.sh --force      rebuild even when up to date
 #   ./update-niri-tablet.sh --tag v26.04.11   install a specific release
-#   ./update-niri-tablet.sh --main       track the repo's main branch
 #   ./update-niri-tablet.sh --yes        no prompts (needs stdin TTY otherwise)
 #
 # After installing, it also checks ~/.config/niri for nodes the new build
@@ -20,7 +21,7 @@
 # launcher entry (niri logo icon) and a ~/.local/bin symlink, so the GUI
 # shows up in app launchers by itself.
 #
-# A plain release run leaves the clone detached on the last release tag,
+# A --tag run leaves the clone detached on that release tag,
 # so the script itself can be older than origin/main. Before doing
 # anything it therefore refreshes itself from origin/main and re-execs
 # (guarded, no loop), keeping updater fixes and new sub-steps from
@@ -35,8 +36,8 @@ usage() {
     cat <<'EOF'
   --check        report installed/latest/changelog, then exit
   --force        rebuild and reinstall even when up to date
-  --tag <vX.Y.Z> pick a specific release tag instead of the latest
-  --main         build origin/main instead of a release tag
+  --tag <vX.Y.Z> build a release tag instead of main (leaves the clone detached)
+  --main         build main (the default)
   -y, --yes      skip the confirmation prompt
   -h, --help     this help
 EOF
@@ -263,7 +264,7 @@ if [ "${NIRI_TABLET_UPDATER_SELF:-}" != 1 ]; then
 fi
 
 # ── args ───────────────────────────────────────────────────────────
-CHECK=0; FORCE=0; ASSUME_YES=0; DO_MAIN=0; TARGET=''
+CHECK=0; FORCE=0; ASSUME_YES=0; DO_MAIN=1; TARGET=''
 while [ $# -gt 0 ]; do
     case $1 in
         --check) CHECK=1 ;;
@@ -271,8 +272,8 @@ while [ $# -gt 0 ]; do
         -y|--yes) ASSUME_YES=1 ;;
         --main)  DO_MAIN=1 ;;
         --tag)   [ $# -ge 2 ] || die "--tag needs a version, e.g. --tag v26.04.12"
-                 TARGET=$2; shift ;;
-        --tag=*) TARGET=${1#--tag=} ;;
+                 TARGET=$2; DO_MAIN=0; shift ;;
+        --tag=*) TARGET=${1#--tag=}; DO_MAIN=0 ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
@@ -306,7 +307,20 @@ if [ -n "$INSTALLED" ]; then
     INST_VER=$(printf '%s' "$INSTALLED" | awk '{print $2}')      # 26.04.12.g2e96de30-3
     INST_REL=$(printf '%s' "$INST_VER" | cut -d. -f1-3)          # 26.04.12
     UP_TO_DATE=0
-    [ "$TARGET" != main ] && [ "v$INST_REL" = "$TARGET" ] && UP_TO_DATE=1
+    if [ "$TARGET" = main ]; then
+        # main carries no release tag: compare against its PKGBUILD version.
+        # Use origin/main when the build below would fast-forward to it.
+        MAIN_REF=main
+        if ! git rev-parse -q --verify refs/heads/main >/dev/null ||
+           git merge-base --is-ancestor main origin/main 2>/dev/null; then
+            MAIN_REF=origin/main
+        fi
+        MAIN_PKGBUILD=$(git show "$MAIN_REF:pkg/PKGBUILD" 2>/dev/null || true)
+        MAIN_VER=$(printf '%s\n' "$MAIN_PKGBUILD" | sed -n 's/^pkgver=//p')-$(printf '%s\n' "$MAIN_PKGBUILD" | sed -n 's/^pkgrel=//p')
+        [ "$INST_VER" = "$MAIN_VER" ] && UP_TO_DATE=1
+    else
+        [ "v$INST_REL" = "$TARGET" ] && UP_TO_DATE=1
+    fi
 else
     INST_VER='(not installed)'; INST_REL=''; UP_TO_DATE=0
 fi
@@ -319,6 +333,20 @@ else
 fi
 [ -n "$STOCK_NIRI" ] && say "  stock niri : $STOCK_NIRI $DIM(will be replaced)$N"
 say "  target    : $TARGET $DIM(niri $BASE_TAG + patches)$N"
+
+# ── upstream (fork setups) ─────────────────────────────────────────
+# Report only: merging upstream into main stays a manual, reviewed step.
+if git remote get-url upstream >/dev/null 2>&1; then
+    if git fetch upstream --tags --quiet 2>/dev/null; then
+        UP_NEW=$(git rev-list --count main..upstream/main 2>/dev/null || echo 0)
+        if [ "$UP_NEW" -gt 0 ]; then
+            warn "upstream has $UP_NEW commit(s) that main does not have"
+            say "    ${DIM}review: git log main..upstream/main   merge: git merge upstream/main$N"
+        fi
+    else
+        warn "git fetch upstream failed — skipping the upstream check"
+    fi
+fi
 
 # ── changelog since the installed release ──────────────────────────
 # Only when something is actually pending: an update or a fresh install.
@@ -345,7 +373,7 @@ elif [ "$UP_TO_DATE" = 1 ]; then
         warn "already up to date — rebuilding anyway (--force)"
     else
         ok "already up to date ($TARGET) — nothing to do"
-        say "    $DIM--force rebuilds anyway; --main tracks the development branch$N"
+        say "    $DIM--force rebuilds anyway; --tag vX.Y.Z builds a specific release$N"
         if [ "$CHECK" != 1 ]; then
             check_config_rename
             build_easysetup
@@ -395,7 +423,9 @@ NEW_VER=$(pacman -Q niri-tablet 2>/dev/null | awk '{print $2}')
 
 # ── keep stock niri pinned ─────────────────────────────────────────
 cd "$ROOT"
-if ! grep -E '^[[:space:]]*IgnorePkg([[:space:]]|=)' /etc/pacman.conf | grep -qw niri; then
+# pacman-conf reads only [options], so a pin in a repo section counts as missing.
+niri_pinned() { pacman-conf IgnorePkg 2>/dev/null | grep -qx niri; }
+if ! niri_pinned; then
     warn "/etc/pacman.conf does not pin niri — the next pacman -Syu swaps back to stock niri"
     FIX=0
     if [ "$ASSUME_YES" = 1 ]; then FIX=1; else
@@ -405,12 +435,20 @@ if ! grep -E '^[[:space:]]*IgnorePkg([[:space:]]|=)' /etc/pacman.conf | grep -qw
     fi
     if [ "$FIX" = 1 ]; then
         sudo cp /etc/pacman.conf /etc/pacman.conf.bak-niri-tablet
+        # The pin must sit in [options]: extend an active IgnorePkg line,
+        # else replace the stock commented one, else add it under [options].
         if grep -qE '^[[:space:]]*IgnorePkg([[:space:]]|=)' /etc/pacman.conf; then
             sudo sed -i 's/^\([[:space:]]*IgnorePkg[[:space:]]*=[[:space:]]*.*\)$/\1 niri/' /etc/pacman.conf
+        elif grep -qE '^#[[:space:]]*IgnorePkg([[:space:]]|=)' /etc/pacman.conf; then
+            sudo sed -i '0,/^#[[:space:]]*IgnorePkg[[:space:]=].*$/s//IgnorePkg = niri/' /etc/pacman.conf
         else
-            printf '\nIgnorePkg = niri\n' | sudo tee -a /etc/pacman.conf >/dev/null
+            sudo sed -i '/^\[options\]/a IgnorePkg = niri' /etc/pacman.conf
         fi
-        ok "niri pinned $DIM(backup: /etc/pacman.conf.bak-niri-tablet)$N"
+        if niri_pinned; then
+            ok "niri pinned $DIM(backup: /etc/pacman.conf.bak-niri-tablet)$N"
+        else
+            warn "could not pin niri — add IgnorePkg = niri under [options] in /etc/pacman.conf by hand"
+        fi
     fi
 fi
 
