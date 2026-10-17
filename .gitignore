@@ -12,3 +12,9 @@
 # cargo
 /target/
 /niri-tablet-easysetup/target/
+
+# makepkg workspace: extras/wvkbd builds wvkbd from git
+/extras/wvkbd/src/
+/extras/wvkbd/pkg/
+/extras/wvkbd/wvkbd/
+/extras/wvkbd/*.pkg.tar.zst
