@@ -5,20 +5,29 @@
 #   niri-osk.sh resize   if the keyboard is up, restart it with the binary,
 #                        height and mode matching the current orientation
 #
-# Landscape: deskintl (full PC layout), overlays windows.
-# Portrait:  mobintl (phone layout), reserves space so windows shrink above it.
+# Landscape: deskintl (full PC layout), reserves space so windows shrink above it.
+# Portrait:  deskintl too, same mode.
+#            Set BIN_PORTRAIT=wvkbd-mobintl for the phone layout.
 # Orientation comes from the output's logical size, so it works for panels
 # that are natively portrait too.
 #
 # Called from the bottom-edge swipe gesture and after rotating the screen.
 
 BIN_LANDSCAPE=wvkbd-deskintl
-BIN_PORTRAIT=wvkbd-mobintl
-ARGS_LANDSCAPE=--non-exclusive
+BIN_PORTRAIT=wvkbd-deskintl
+# --non-exclusive draws the keyboard over windows instead of shrinking them.
+ARGS_LANDSCAPE=
 ARGS_PORTRAIT=
 OUTPUT=eDP-1
-H_LANDSCAPE=260
-H_PORTRAIT=360
+H_LANDSCAPE=217
+H_PORTRAIT=300
+# Key label font (deskintl default: "Sans 18").
+FONT_LANDSCAPE="Sans 14"
+FONT_PORTRAIT="Sans 12"
+# Layers the ⌨ key cycles through. With two, ⌨ toggles Latin <-> Cyrillic.
+# Add ",special" for Home/End/PgUp/PgDn/Ins ("Abc" there returns to the
+# last letter layer, not always to Latin).
+LAYERS=full,cyrillic
 
 # Resolve the running niri instance's IPC socket (newest first).
 SOCKET=$(ls -t "/run/user/$(id -u)"/niri.wayland-*.sock 2>/dev/null | head -1)
@@ -38,12 +47,15 @@ stop() {
     pkill -x "$BIN_PORTRAIT"
 }
 
-# wvkbd picks -H or -L by its own width/height check, so pass both.
+# wvkbd picks -H/-l or -L/--landscape-layers by its own width/height
+# check, so pass both.
 start() {
     if [ "$(orientation)" = portrait ]; then
-        "$BIN_PORTRAIT" -H "$H_PORTRAIT" -L "$H_PORTRAIT" $ARGS_PORTRAIT >/dev/null 2>&1 &
+        "$BIN_PORTRAIT" -H "$H_PORTRAIT" -L "$H_PORTRAIT" --fn "$FONT_PORTRAIT" \
+            -l "$LAYERS" --landscape-layers "$LAYERS" $ARGS_PORTRAIT >/dev/null 2>&1 &
     else
-        "$BIN_LANDSCAPE" -H "$H_LANDSCAPE" -L "$H_LANDSCAPE" $ARGS_LANDSCAPE >/dev/null 2>&1 &
+        "$BIN_LANDSCAPE" -H "$H_LANDSCAPE" -L "$H_LANDSCAPE" --fn "$FONT_LANDSCAPE" \
+            -l "$LAYERS" --landscape-layers "$LAYERS" $ARGS_LANDSCAPE >/dev/null 2>&1 &
     fi
 }
 

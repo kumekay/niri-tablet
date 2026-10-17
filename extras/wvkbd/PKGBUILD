@@ -2,9 +2,12 @@
 # includes the Super modifier key on deskintl. The AUR wvkbd-git builds the
 # stale jjsullivan5196 repo, which lacks it.
 # Also builds the mobintl variant (mobile layers) alongside deskintl.
+# deskintl-no-fkeys.patch drops the Esc/F1-F12/Del row from the full and
+# cyrillic layers; Esc moves to the start of the number row and Cmp to the
+# right Ctrl's place.
 pkgname=wvkbd-touch
-pkgver=r277.6b41504
-pkgrel=1
+pkgver=r287.bbecd99
+pkgrel=5
 pkgdesc='On-screen keyboard for wlroots (maintained upstream, with Super key)'
 url='https://git.sr.ht/~proycon/wvkbd'
 arch=('x86_64' 'aarch64')
@@ -13,12 +16,21 @@ depends=('wayland' 'pango' 'cairo' 'glibc')
 makedepends=('git' 'fontconfig' 'libxkbcommon' 'scdoc')
 provides=('wvkbd' 'wvkbd-git')
 conflicts=('wvkbd' 'wvkbd-git')
-source=("git+https://git.sr.ht/~proycon/wvkbd")
-sha256sums=('SKIP')
+source=("git+https://git.sr.ht/~proycon/wvkbd"
+        'deskintl-no-fkeys.patch')
+sha256sums=('SKIP'
+            '2ed3d9b4aed0b1fcf96c44d776722e480d1790362cbbaede7f9de65a5e054c32')
 
 pkgver() {
   cd wvkbd
   printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd wvkbd
+  # A previous build's patch may still be applied.
+  git reset --hard
+  patch -Np1 < "$srcdir/deskintl-no-fkeys.patch"
 }
 
 build() {
