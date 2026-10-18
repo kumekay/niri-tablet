@@ -1,0 +1,219 @@
+--- a/keyboard.c
++++ b/keyboard.c
+@@ -23,6 +23,58 @@
+ #endif
+ #include KEYMAP
+ 
++/* Upload the same keymap niri uses (Colemak + Russian as group 2), not
++ * wvkbd's own QWERTY keymap. Apps that open while the keyboard is up get
++ * niri's keymap from the compositor, so wvkbd's key codes must mean the same
++ * thing in both. <COMP> holds the character for Copy keys; U00000000 is
++ * dropped by xkbcommon and <COMP> stays Menu. */
++static const char *niri_keymap =
++    "xkb_keymap {\n"
++    "xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n"
++    "xkb_types { include \"complete\" };\n"
++    "xkb_compat { include \"complete\" };\n"
++    "xkb_symbols {\n"
++    "include \"pc+us(colemak)+ru:2+inet(evdev)\"\n"
++    "key <COMP> { [ U%08X, U%08X ] };\n"
++    "};\n"
++    "};\n";
++
++/* Group 0 = Colemak, group 1 = Russian. */
++static uint32_t
++kbd_group(struct kbd *kb)
++{
++    return strcmp(kb->layout->keymap_name, "cyrillic") == 0;
++}
++
++/* The layouts use QWERTY key codes. In the Colemak group, send the code of
++ * the key that types the letter on the label. */
++static uint32_t
++kbd_code(struct kbd *kb, uint32_t code)
++{
++    if (kbd_group(kb))
++        return code;
++    switch (code) {
++    case KEY_E: return KEY_K;
++    case KEY_R: return KEY_S;
++    case KEY_T: return KEY_F;
++    case KEY_Y: return KEY_O;
++    case KEY_U: return KEY_I;
++    case KEY_I: return KEY_L;
++    case KEY_O: return KEY_SEMICOLON;
++    case KEY_P: return KEY_R;
++    case KEY_S: return KEY_D;
++    case KEY_D: return KEY_G;
++    case KEY_F: return KEY_E;
++    case KEY_G: return KEY_T;
++    case KEY_J: return KEY_Y;
++    case KEY_K: return KEY_N;
++    case KEY_L: return KEY_U;
++    case KEY_SEMICOLON: return KEY_P;
++    case KEY_N: return KEY_J;
++    default: return code;
++    }
++}
++
+ void
+ kbd_switch_layout(struct kbd *kb, struct layout *l, size_t layer_index)
+ {
+@@ -282,8 +334,8 @@
+ {
+     if ((mods & Shift) == Shift)
+         zwp_virtual_keyboard_v1_key(vkbd, time, KEY_LEFTSHIFT, state);
+-    if ((mods & CapsLock) == CapsLock)
+-        zwp_virtual_keyboard_v1_key(vkbd, time, KEY_CAPSLOCK, state);
++    // No key event for CapsLock: Colemak maps that key to BackSpace. The
++    // modifiers event alone sets Lock.
+     if ((mods & Ctrl) == Ctrl)
+         zwp_virtual_keyboard_v1_key(vkbd, time, KEY_LEFTCTRL, state);
+     if ((mods & Alt) == Alt)
+@@ -321,8 +373,8 @@
+                                             WL_KEYBOARD_KEY_STATE_RELEASED);
+             } else {
+                 zwp_virtual_keyboard_v1_key(kb->vkbd, time,
+-                                            unlatch_shift && kb->last_press->shift_code ?
+-                                            kb->last_press->shift_code : kb->last_press->code,
++                                            kbd_code(kb, unlatch_shift && kb->last_press->shift_code ?
++                                            kb->last_press->shift_code : kb->last_press->code),
+                                             WL_KEYBOARD_KEY_STATE_RELEASED);
+             }
+         }
+@@ -350,7 +402,7 @@
+         }
+ 
+         if (unlatch_shift||unlatch_ctrl||unlatch_alt||unlatch_super||unlatch_altgr||unlatch_tab) {
+-            zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
++            zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, kbd_group(kb));
+         }
+ 
+         if (kb->compose >= 2) {
+@@ -443,13 +495,13 @@
+             zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, k->code_mod, WL_KEYBOARD_KEY_STATE_PRESSED);
+             if (k->reset_mod) {
+                 zwp_virtual_keyboard_v1_modifiers(kb->vkbd, k->code_mod, 0, 0,
+-                                                  0);
++                                                  kbd_group(kb));
+             } else {
+                 zwp_virtual_keyboard_v1_modifiers(
+-                    kb->vkbd, kb->mods ^ k->code_mod, 0, 0, 0);
++                    kb->vkbd, kb->mods ^ k->code_mod, 0, 0, kbd_group(kb));
+             }
+         } else {
+-            zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
++            zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, kbd_group(kb));
+         }
+         kb->last_swipe = kb->last_press = k;
+         kb->last_press_offset = time - monotime();
+@@ -457,12 +509,12 @@
+         if ((kb->shift_space_is_tab) && (k->code == KEY_SPACE) && (kb->mods & Shift)) {
+             // shift space is tab
+             zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, Shift, WL_KEYBOARD_KEY_STATE_RELEASED);
+-            zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods ^ Shift, 0, 0, 0);
++            zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods ^ Shift, 0, 0, kbd_group(kb));
+             zwp_virtual_keyboard_v1_key(kb->vkbd, time, KEY_TAB,
+                                         WL_KEYBOARD_KEY_STATE_PRESSED);
+         } else {
+-            zwp_virtual_keyboard_v1_key(kb->vkbd, time, (kb->mods & Shift) && k->shift_code ?
+-                                        k->shift_code : k->code,
++            zwp_virtual_keyboard_v1_key(kb->vkbd, time, kbd_code(kb, (kb->mods & Shift) && k->shift_code ?
++                                        k->shift_code : k->code),
+                                         WL_KEYBOARD_KEY_STATE_PRESSED);
+         }
+         if (kb->print || kb->print_intersect)
+@@ -493,7 +545,7 @@
+                 kbd_draw_key(kb, k, Unpress);
+             }
+         }
+-        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
++        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, kbd_group(kb));
+         break;
+     case Layout:
+         // switch to the layout determined by the key
+@@ -553,7 +605,7 @@
+                     fprintf(stderr, "Pressing copy key\n");
+             create_and_upload_keymap(kb, kb->layout->keymap_name, k->code);
+         }
+-        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
++        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, kbd_group(kb));
+         zwp_virtual_keyboard_v1_key(kb->vkbd, time, 127, // COMP key
+                                     WL_KEYBOARD_KEY_STATE_PRESSED);
+         if (kb->print || kb->print_intersect)
+@@ -780,7 +832,7 @@
+         fprintf(stderr, "No such keymap defined: %s\n", name);
+         exit(9);
+     }
+-    const char *keymap_template = keymaps[keymap_index];
++    const char *keymap_template = niri_keymap;
+     size_t keymap_size = strlen(keymap_template) + 64;
+     char *keymap_str = malloc(keymap_size);
+     sprintf(keymap_str, keymap_template, comp_unichr, comp_unichr);
+--- a/layout.deskintl.h
++++ b/layout.deskintl.h
+@@ -264,12 +264,12 @@
+   {"ё", "Ё", 1.0, Code, KEY_GRAVE},
+   {"1", "!", 1.0, Code, KEY_1},
+   {"2", "\"", 1.0, Code, KEY_2},
+-  {"3", "#", 1.0, Code, KEY_3},
+-  {"4", "*", 1.0, Code, KEY_4},
+-  {"5", ":", 1.0, Code, KEY_5},
+-  {"6", ",", 1.0, Code, KEY_6},
+-  {"7", ".", 1.0, Code, KEY_7},
+-  {"8", ";", 1.0, Code, KEY_8},
++  {"3", "№", 1.0, Code, KEY_3},
++  {"4", ";", 1.0, Code, KEY_4},
++  {"5", "%", 1.0, Code, KEY_5},
++  {"6", ":", 1.0, Code, KEY_6},
++  {"7", "?", 1.0, Code, KEY_7},
++  {"8", "*", 1.0, Code, KEY_8},
+   {"9", "(", 1.0, Code, KEY_9, &layouts[ComposeBracket]},
+   {"0", ")", 1.0, Code, KEY_0, &layouts[ComposeBracket]},
+   {"-", "_", 1.0, Code, KEY_MINUS, &layouts[ComposeBracket]},
+@@ -290,7 +290,7 @@
+   {"з", "з", 1.0, Code, KEY_P},
+   {"х", "Х", 1.0, Code, KEY_LEFTBRACE},
+   {"ъ", "Ъ", 1.0, Code, KEY_RIGHTBRACE},
+-  {"\\", "|", 1.0, Code, KEY_BACKSLASH},
++  {"\\", "/", 1.0, Code, KEY_BACKSLASH},
+   {"", "", 0.0, EndRow},
+ 
+   {"Caps", "Caps", 1.0, Mod, CapsLock, .scheme = 1},
+@@ -311,14 +311,14 @@
+   {"⇧", "⇫", 2.5, Mod, Shift, .scheme = 1},
+   {"я", "Я", 1.0, Code, KEY_Z},
+   {"ч", "Ч", 1.0, Code, KEY_X, &layouts[ComposeCyrChe]},
+-  {"c", "С", 1.0, Code, KEY_C},
++  {"с", "С", 1.0, Code, KEY_C},
+   {"м", "М", 1.0, Code, KEY_V},
+   {"и", "И", 1.0, Code, KEY_B, &layouts[ComposeCyrI]},
+   {"т", "Т", 1.0, Code, KEY_N},
+   {"ь", "Ь", 1.0, Code, KEY_M},
+   {"б", "Б", 1.0, Code, KEY_COMMA},
+   {"ю", "Ю", 1.0, Code, KEY_DOT},
+-  {"/", "?", 1.0, Code, KEY_SLASH, &layouts[ComposePunctuation]},
++  {".", ",", 1.0, Code, KEY_SLASH, &layouts[ComposePunctuation]},
+   {"↑", "↑", 1.0, Code, KEY_UP, .scheme = 1},
+   {"⇧", "⇫", 1.0, Mod, Shift, .scheme = 1},
+   {"", "", 0.0, EndRow},
+@@ -807,7 +807,7 @@
+   {"⇧", "⇫", 1.5, Mod, Shift, .scheme = 1},
+   {"", "", 3, Pad},
+   {"!", "!", 1, Code, KEY_1, 0, Shift},
+-  {"?", "?", 1, Code, KEY_DOT, 0, Shift},
++  {"?", "?", 1, Code, KEY_SLASH, 0, Shift},
+   {"·", "·", 1, Copy, 0x2027, 0, 0x2027},
+   {",", ",", 1, Code, KEY_COMMA},
+   {"", "", 1.5, Pad},
+@@ -827,8 +827,8 @@
+   {"", "", 4.5, Pad},
+   {"", "", 0, EndRow},
+   {"⇧", "⇫", 1.5, Mod, Shift, .scheme = 1},
+-  {"<", "<", 1, Code, KEY_COMMA, 0, AltGr},
+-  {">", ">", 1, Code, KEY_SLASH, 0, Shift},
++  {"<", "<", 1, Code, KEY_COMMA, 0, Shift},
++  {">", ">", 1, Code, KEY_DOT, 0, Shift},
+   {"`", "`", 1, Code, KEY_GRAVE},
+   {"\"", "\"", 1, Code, KEY_APOSTROPHE, 0, Shift},
+   {"'", "'", 1, Code, KEY_APOSTROPHE},
